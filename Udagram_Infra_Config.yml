@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Udagram - High Availability Web App
+
+Parameters:
+
+  # Project Name
+    ProjectName:
+      Description: Name of the Project
+      Type: String
+
+  # Project VPC CIDR
+    VPCCIDR:
+      Description: IP Range for the Project
+      Type: String
+      Default: 10.0.0.0/16
+
+   # Project Public Subnet 1
+    PublicSubnet1CIDR:
+      Description: Enter the IP range
+      Type: String
+      Default: 10.0.0.0/24
+
+  # Project Public Subnet 1
+    PublicSubnet2CIDR:
+      Description: Enter the IP range
+      Type: String
+      Default: 10.0.1.0/24
+
+  # Project Private Subnet 1
+    PrivateSubnet1CIDR:
+      Description: Enter the IP range
+      Type: String
+      Default: 10.0.2.0/24
+
+  # Project Private Subnet 2
+    PrivateSubnet2CIDR:
+      Description: Enter the IP range
+      Type: String
+      Default: 10.0.3.0/24
+
+
+
+Resources:
+  
+# Creating VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsHostnames: true
+      Tags:
+        - 
+          Key: Name  
+          Value: !Ref ProjectName 
+
+
+# Adding Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: !Ref ProjectName
+         
+
+# Adding InternetGatewayAttachment (required with Internet Gateway)
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+
+# Adding Public Subnet 1
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - 
+          Key: Name
+          Value: !Sub ${ProjectName} Public Subnet 1 (AZ0)
+
+# Adding Public Subnet 2
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - 
+          Key: Name
+          Value: !Sub ${ProjectName} Public Subnet 2 (AZ1)
+
+# Adding Private Subnet 1
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - 
+          Key: Name
+          Value: !Sub ${ProjectName} Private Subnet (AZ0)
+
+
+# Adding Private Subnet 2
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - 
+          Key: Name
+          Value: !Sub ${ProjectName} Private Subnet (AZ1)
+
+
+# Adding NAT Gateway / Creating Nat Gateways EIP (Elastic IP)
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties: 
+      Domain: vpc
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway1: 
+    Type: AWS::EC2::NatGateway
+    Properties: 
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId  # Retreving EIP IP
+      SubnetId: !Ref PublicSubnet1
+
+  NatGateway2: 
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId    # Retreving EIP IP
+      SubnetId: !Ref PublicSubnet2
+
+# Adding PUBLIC Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - 
+          Key: Name
+          Value: !Sub ${ProjectName} Public Routes
+
+# Default Routing Rule - Public Rule  (Send all traffic to Internet Gateway)
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0  # Rule: send all traffic to Internet Gateway. (next line)
+      GatewayId: !Ref InternetGateway
+
+#  Applying routing rule to Public Subnet 1
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1   
+
+ #  Applying routing rule to Public Subnet 2
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+# Adding PRIVATE Route Table
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPC
+      Tags: 
+        - 
+          Key: Name
+          Value: !Sub ${ProjectName} Private Routes 
+
+# Default Routing Rule - Private Subnet Rule
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0  # send all traffic to Nat Gateway
+      NatGatewayId: !Ref NatGateway1
+  
+#  Applying routing rule to Private Subnet 1
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+  
+#  Applying routing rule to Private Subnet 2
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet2

@@ -1,12 +1,11 @@
 # Deploy-Infrastructure-as-Code
 Udacity Cloud DevOps Engineer Nanodegree Program - Project 2 : Deploy a High-Availability Web App using CloudFormation
-Final Version 07/20/2019 
+Final Version - 07/20/2019 
 
 
 Problem:
 Your company is creating an Instagram clone called Udagram. Developers pushed the latest version of their code in a zip file located in a public S3 Bucket. You have been tasked with deploying the application, along with the necessary supporting software into its matching infrastructure.
 This needs to be done in an automated fashion so that the infrastructure can be discarded as soon as the testing team finishes their tests and gathers their results.
-
 
 
 

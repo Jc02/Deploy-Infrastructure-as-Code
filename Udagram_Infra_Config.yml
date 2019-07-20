@@ -214,3 +214,178 @@ Resources:
     Properties:
       RouteTableId: !Ref PrivateRouteTable1
       SubnetId: !Ref PrivateSubnet2
+
+# Creating Load BAlancer Security Group
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our load BAlancer
+      VpcId: !Ref VPC
+
+      # Inbound Traffic Rules 
+          # allowing traffic from port 80 to 80 from everywhere
+      SecurityGroupIngress: 
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      # Outbound Traffic Rules
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+
+# Creating Security Group for Web Servers (EC2 Instance under Private Subnets)
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our hosts and/Or SSH from local only
+      VpcId: !Ref VPC
+      # Inbound rule
+      SecurityGroupIngress: 
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+        
+        # For Testing purpose only. Close the port once everything is working as expected.
+        # Adding Additional Rule (SSH)
+#      - IpProtocol: tcp
+#        FromPort: 22
+#        ToPort: 22
+#        CidrIp: 0.0.0.0/0
+
+      # Outbound Traffic Rules
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+
+# Creating Web Server Launch Configuration
+  LaunchWebServerInstance:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udagram-app/index.html /var/www/html
+      IamInstanceProfile: arn:aws:iam::718543789873:instance-profile/s3-read-only-role   # Iam role for s3 full access!
+      ImageId: ami-07b4f3c02c7f83d59  # Ubuntu Server 18.04
+      SecurityGroups:
+      - Ref: WebServerSecGroup
+      InstanceType: t2.medium   # 2 vCPU & 4GB RAM
+      KeyName: UdagramKey
+      AssociatePublicIpAddress: true
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdk"
+        Ebs:
+          VolumeSize: '10'   # 10 GB Hard Drive Space
+          DeleteOnTermination: "true"
+
+ # Creating Auto Scaling Group
+  WebAppScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${ProjectName} EC2 Instances
+      VPCZoneIdentifier: 
+      - 
+        !Ref PrivateSubnet1
+        
+      -
+        !Ref PrivateSubnet2
+        
+      LaunchConfigurationName: 
+        Ref: LaunchWebServerInstance
+      MinSize: 4
+      MaxSize: 4
+      TargetGroupARNs:
+        - Ref: WebAppTargetGroup
+
+# Adding Target Groups and Listeners
+
+  WebAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      -
+        !Ref PublicSubnet1
+      -
+        !Ref PublicSubnet2
+
+      SecurityGroups:
+      - Ref: LBSecGroup
+  
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLB
+      Port: '80'
+      Protocol: HTTP
+
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref 'WebAppTargetGroup'
+      Conditions:
+      - Field: path-pattern
+        Values: [/]  # update here if you have 2 application. for eg: [app1/app2]
+      ListenerArn: !Ref 'Listener'
+      Priority: 1
+  
+  # creating WebAppTargetGroup
+  # Cheecking if we get the response or not; if not then load-
+  # -Balancer will kick in and create new instance if it's unhealthy
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+       HealthCheckIntervalSeconds: 20
+       HealthCheckPath: /
+       HealthCheckProtocol: HTTP
+       HealthCheckTimeoutSeconds: 16
+       HealthyThresholdCount: 2   # if get 2 valid response > healthy
+       Port: 80
+       Protocol: HTTP
+       UnhealthyThresholdCount: 5  # it will try 5 times > declare unhealthy with interval sets to 20 seconds.
+       VpcId: !Ref VPC
+          
+ # Creating S3 Bucket   
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: PublicRead
+      BucketName: udagram-app
+      
+
+
+
+
+
+      
+# Outputs Section
+Outputs:
+  LBURL:
+    # Value: !GetAtt WebAppLB.DNSName        # Getting the URL from the LoadBalancer (WebAppLB Resource)
+    # Adding http:// and joining the URL/DNS Name together
+    Value: !Join    
+      - ''
+      - - 'http://'
+        - !GetAtt 
+          - WebAppLB
+          - DNSName
+    Export:
+      Name: !Sub "${ProjectName}-Public-URL"
